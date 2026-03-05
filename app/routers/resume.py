@@ -78,3 +78,25 @@ def review_cv(body: GenerateInput):
     tips = resume_builder.review(identity_data, body.job_data.model_dump())
 
     return tips
+
+
+# ─── Agent Endpoint ───────────────────────────────────────
+# This is the new "brain" endpoint. Instead of calling specific
+# pipeline steps, you just tell the agent what you want in
+# plain English, and it figures out the rest.
+
+from modules import agent
+
+class AgentInput(BaseModel):
+    goal: str  # e.g. "Tailor my resume for this job posting: https://..."
+
+
+@router.post("/agent")
+def agent_endpoint(body: AgentInput):
+    """
+    Natural language agent endpoint.
+    Give it a goal and the agent decides which tools to call,
+    in what order, adapting based on results.
+    """
+    result = agent.run(body.goal)
+    return result
