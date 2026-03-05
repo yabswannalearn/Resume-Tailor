@@ -4,14 +4,23 @@ Tool Registry for Resume Tailor Agent.
 Each tool wraps an existing module function and provides
 metadata (name, description, parameters) so the agent LLM
 can discover and decide which tools to call.
+
+TOOLS AVAILABLE:
+- analyze_job: Parse a job posting into structured data
+- load_identity: Load the user's profile from all sources
+- research_company: Research a company's background
+- build_resume: Generate a tailored resume
+- generate_pdf: Render resume to PDF
+- review_resume: Review CV against a job with tips
+- search_ddg: Search the web via DuckDuckGo (free, no API key)
+- search_brave: Search the web via Brave Search (free tier, needs API key)
 """
 
+import os
 from modules import job_analyzer, identity_loader, resume_builder, company_researcher, pdf_generator
 
 
 # ─── Tool wrapper functions ──────────────────────────────
-# These thin wrappers pull args from the shared state bag
-# so the agent doesn't have to manage raw dicts itself.
 
 def tool_analyze_job(state: dict, args: dict) -> dict:
     """Analyze a job posting from URL or raw text."""
@@ -49,7 +58,6 @@ def tool_build_resume(state: dict, args: dict) -> dict:
 
     result = resume_builder.build(job_data, identity)
 
-    # Attach company research if available
     if state.get("company_research"):
         result["company_research"] = state["company_research"]
 
@@ -80,8 +88,80 @@ def tool_review_resume(state: dict, args: dict) -> dict:
     return {"status": "success", "review": result}
 
 
+def tool_search_ddg(state: dict, args: dict) -> dict:
+    """
+    Search the web using DuckDuckGo.
+    Free, no API key needed. Good for general searches.
+    """
+    from duckduckgo_search import DDGS
+
+    query = args.get("query", "")
+    if not query:
+        return {"status": "error", "message": "Missing 'query' parameter."}
+
+    try:
+        results = DDGS().text(query, max_results=5)
+        formatted = [
+            {
+                "title": r.get("title", ""),
+                "url": r.get("href", ""),
+                "snippet": r.get("body", ""),
+            }
+            for r in results
+        ]
+        state.setdefault("search_results", []).extend(formatted)
+        return {"status": "success", "results": formatted}
+    except Exception as e:
+        return {"status": "error", "message": f"DuckDuckGo search failed: {str(e)}"}
+
+
+def tool_search_brave(state: dict, args: dict) -> dict:
+    """
+    Search the web using Brave Search API.
+    Requires a BRAVE_API_KEY in .env (free tier: 2,000 queries/month).
+    Generally returns higher quality results than DuckDuckGo.
+    """
+    import requests
+
+    api_key = os.getenv("BRAVE_API_KEY")
+    if not api_key:
+        return {"status": "error", "message": "BRAVE_API_KEY not set in .env. Get a free key at https://brave.com/search/api/"}
+
+    query = args.get("query", "")
+    if not query:
+        return {"status": "error", "message": "Missing 'query' parameter."}
+
+    try:
+        headers = {
+            "Accept": "application/json",
+            "Accept-Encoding": "gzip",
+            "X-Subscription-Token": api_key,
+        }
+        params = {"q": query, "count": 5}
+        response = requests.get(
+            "https://api.search.brave.com/res/v1/web/search",
+            headers=headers,
+            params=params,
+            timeout=10,
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        formatted = []
+        for r in data.get("web", {}).get("results", []):
+            formatted.append({
+                "title": r.get("title", ""),
+                "url": r.get("url", ""),
+                "snippet": r.get("description", ""),
+            })
+
+        state.setdefault("search_results", []).extend(formatted)
+        return {"status": "success", "results": formatted}
+    except Exception as e:
+        return {"status": "error", "message": f"Brave search failed: {str(e)}"}
+
+
 # ─── Tool Registry ───────────────────────────────────────
-# This is what the agent reads to know what tools exist.
 
 TOOLS = [
     {
@@ -121,6 +201,22 @@ TOOLS = [
         "description": "Review the user's current CV against a target job description. Returns section-by-section scores, tips, missing keywords, and quick wins. Requires both analyze_job and load_identity to have been called first. Use this when the user wants feedback on their existing CV rather than generating a new one.",
         "parameters": {},
         "function": tool_review_resume,
+    },
+    {
+        "name": "search_ddg",
+        "description": "Search the web using DuckDuckGo. Free and requires no API key. Use this to look up company info, job market data, salary ranges, or any general information. Returns top 5 results with titles, URLs, and snippets.",
+        "parameters": {
+            "query": "The search query string (required)"
+        },
+        "function": tool_search_ddg,
+    },
+    {
+        "name": "search_brave",
+        "description": "Search the web using Brave Search. Higher quality results than DuckDuckGo but requires a BRAVE_API_KEY. Use this when you need more accurate or detailed search results. Returns top 5 results with titles, URLs, and snippets.",
+        "parameters": {
+            "query": "The search query string (required)"
+        },
+        "function": tool_search_brave,
     },
 ]
 

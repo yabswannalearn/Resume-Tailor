@@ -1,12 +1,23 @@
-import os
+"""
+Resume Builder Module.
+
+PURPOSE:
+Takes the analyzed job data + your identity profile and produces
+a tailored resume. Also has a review() function for CV feedback.
+
+HOW IT WORKS:
+- build(): Feeds both datasets to AI with instructions to write a tailored
+  resume. Returns structured JSON with personal info, summary, skills,
+  experience, projects, education, and certifications.
+- review(): Compares your current CV against a job and returns section-by-section
+  scores and tips.
+
+UPDATED: Now uses ai_provider.generate() instead of direct Gemini calls.
+"""
+
 import json
-import google.generativeai as genai
-from dotenv import load_dotenv
+from modules.ai_provider import generate
 
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(os.getenv("GEMINI_MODEL"))
 
 def build(job_data: dict, identity_data: dict) -> dict:
     """
@@ -108,17 +119,17 @@ def build(job_data: dict, identity_data: dict) -> dict:
         "certifications": ["...", "..."]
     }}
     """
-    response = model.generate_content(prompt)
+
+    raw_response = generate(prompt)
 
     # Clean and parse the response
-    raw_response = response.text.strip()
-
     if raw_response.startswith("```"):
         raw_response = raw_response.split("```")[1]
         if raw_response.startswith("json"):
             raw_response = raw_response[4:]
 
     return json.loads(raw_response)
+
 
 def review(identity_data: dict, job_data: dict) -> dict:
     """
@@ -192,14 +203,11 @@ def review(identity_data: dict, job_data: dict) -> dict:
     }}
     """
 
-    response = model.generate_content(prompt)
-
-    raw_response = response.text.strip()
+    raw_response = generate(prompt)
 
     if raw_response.startswith("```"):
         raw_response = raw_response.split("```")[1]
         if raw_response.startswith("json"):
             raw_response = raw_response[4:]
 
-    import json
     return json.loads(raw_response)

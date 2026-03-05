@@ -1,14 +1,24 @@
-import os
+"""
+Job Analyzer Module.
+
+PURPOSE:
+Takes a job description (URL or raw text) and extracts structured data
+from it — job title, company, skills, responsibilities, etc.
+
+HOW IT WORKS:
+1. If the input is a URL → scrape the page text with BeautifulSoup
+2. Send the raw text to AI to clean/normalize it (format_job_text)
+3. Send the cleaned text to AI to extract structured JSON (analyze)
+4. Return a dict with all the job details
+
+UPDATED: Now uses ai_provider.generate() instead of direct Gemini calls.
+This means it works with both Ollama (local) and Gemini (cloud).
+"""
+
 import json
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
-from dotenv import load_dotenv
-
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(os.getenv("GEMINI_MODEL"))
+from modules.ai_provider import generate
 
 
 def fetch_job_from_url(url: str) -> str:
@@ -54,8 +64,7 @@ def format_job_text(raw_text: str) -> str:
     Return only the cleaned text, no commentary.
     """
 
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    return generate(prompt)
 
 
 def analyze(job_input: str) -> dict:
@@ -98,12 +107,10 @@ def analyze(job_input: str) -> dict:
     {cleaned_text}
     """
 
-    # Step 4: Call Gemini
-    response = model.generate_content(prompt)
+    # Step 4: Call AI provider (Ollama or Gemini)
+    raw_response = generate(prompt)
 
     # Step 5: Clean and parse JSON response
-    raw_response = response.text.strip()
-
     if raw_response.startswith("```"):
         raw_response = raw_response.split("```")[1]
         if raw_response.startswith("json"):

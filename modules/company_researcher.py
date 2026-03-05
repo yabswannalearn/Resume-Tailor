@@ -1,13 +1,17 @@
-import os
+"""
+Company Researcher Module.
+
+PURPOSE:
+Researches a company by scraping their website and asking AI
+to summarize what they do, their culture, and fit for the applicant.
+
+UPDATED: Now uses ai_provider.generate() instead of direct Gemini calls.
+"""
+
+import json
 import requests
 from bs4 import BeautifulSoup
-import google.generativeai as genai
-from dotenv import load_dotenv
-
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(os.getenv("GEMINI_MODEL"))
+from modules.ai_provider import generate
 
 
 def scrape_company_website(company_name: str) -> str:
@@ -24,7 +28,6 @@ def scrape_company_website(company_name: str) -> str:
         soup = BeautifulSoup(search_response.text, "html.parser")
 
         # Try to grab the first result link
-        first_result = soup.find("a", href=True)
         company_url = None
 
         for a in soup.find_all("a", href=True):
@@ -62,7 +65,7 @@ def research(job_data: dict) -> dict:
     # Step 1: Scrape company info
     company_text = scrape_company_website(company_name)
 
-    # Step 2: Ask Gemini to summarize it
+    # Step 2: Ask AI to summarize it
     prompt = f"""
     You are a company research assistant helping a job applicant prepare for an application.
 
@@ -86,14 +89,11 @@ def research(job_data: dict) -> dict:
     }}
     """
 
-    response = model.generate_content(prompt)
-
-    raw_response = response.text.strip()
+    raw_response = generate(prompt)
 
     if raw_response.startswith("```"):
         raw_response = raw_response.split("```")[1]
         if raw_response.startswith("json"):
             raw_response = raw_response[4:]
 
-    import json
     return json.loads(raw_response)

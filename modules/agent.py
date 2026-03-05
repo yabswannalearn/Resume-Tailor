@@ -10,7 +10,7 @@ what to do on its own using a ReAct loop:
 
 HOW IT WORKS (step by step):
 
-1. We build a SYSTEM PROMPT that tells Gemini:
+1. We build a SYSTEM PROMPT that tells the AI:
    - "You are an AI agent with access to these tools: [list]"
    - "You must respond in a specific JSON format"
    - "Either call a tool OR give a final answer"
@@ -19,9 +19,9 @@ HOW IT WORKS (step by step):
    has context from previous interactions.
 
 3. We start a LOOP (max 10 iterations for safety):
-   a. Send the full conversation history to Gemini
-   b. Gemini responds with either:
-      - A TOOL CALL: {"action": "tool_name", "args": {...}, "thought": "why I'm doing this"}
+   a. Send the full conversation history to the AI
+   b. AI responds with either:
+      - A TOOL CALL: {"action": "tool_name", "args": {...}, "thought": "why"}
       - A FINAL ANSWER: {"action": "final_answer", "summary": "...", "thought": "..."}
    c. If tool call → we execute the tool, add the result to history, loop again
    d. If final answer → we break out of the loop and return
@@ -30,29 +30,23 @@ HOW IT WORKS (step by step):
    data from each other (e.g., analyze_job stores job_data, build_resume reads it).
 
 5. All steps are logged so we can return a full trace of the agent's reasoning.
+
+UPDATED: Now uses ai_provider.generate() instead of direct Gemini calls.
+Works with both Ollama (local Qwen3) and Gemini (cloud).
 """
 
-import os
 import json
-import google.generativeai as genai
-from dotenv import load_dotenv
-from modules.tools import get_tool_descriptions, get_tool_by_name
+from modules.ai_provider import generate
+from modules.tools import get_tool_descriptions, get_tool_by_name, TOOLS
 from modules.memory import format_memory_for_prompt, save_session
 
-load_dotenv()
-
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-model = genai.GenerativeModel(os.getenv("GEMINI_MODEL"))
-
 # Maximum number of reasoning steps before the agent is forced to stop.
-# This prevents infinite loops if Gemini keeps calling tools endlessly.
 MAX_ITERATIONS = 10
 
 
 def build_system_prompt() -> str:
     """
-    Build the system prompt that tells Gemini HOW to be an agent.
-    This is the most critical piece — it defines the agent's behavior.
+    Build the system prompt that tells the AI HOW to be an agent.
     """
 
     tool_descriptions = get_tool_descriptions()
@@ -98,8 +92,8 @@ You MUST respond with ONLY a valid JSON object in one of these two formats:
 
 def parse_agent_response(raw_text: str) -> dict:
     """
-    Parse Gemini's response into a structured dict.
-    Handles the common case where Gemini wraps JSON in markdown code fences.
+    Parse the AI's response into a structured dict.
+    Handles markdown code fences and other formatting quirks.
     """
     text = raw_text.strip()
 
@@ -109,6 +103,21 @@ def parse_agent_response(raw_text: str) -> dict:
         if text.startswith("json"):
             text = text[4:]
         text = text.strip()
+
+    # Try to find JSON object in the text if it's wrapped in other content
+    if not text.startswith("{"):
+        start = text.find("{")
+        if start != -1:
+            # Find the matching closing brace
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        text = text[start:i+1]
+                        break
 
     return json.loads(text)
 
@@ -130,14 +139,10 @@ def run(goal: str) -> dict:
     # The system prompt defines the agent's identity and tools
     system_prompt = build_system_prompt()
 
-    # Conversation history — this grows as the agent calls tools
-    # The agent sees this full history on every iteration
-    conversation = [
-        {"role": "user", "parts": [f"My goal: {goal}"]},
-    ]
+    # Conversation history — grows as the agent calls tools
+    messages = [system_prompt, f"\nMy goal: {goal}\n"]
 
     # Shared state bag — tools read/write data here
-    # e.g., analyze_job writes state["job_data"], build_resume reads it
     state = {}
 
     # Log of all reasoning steps for transparency
@@ -147,28 +152,26 @@ def run(goal: str) -> dict:
     tools_used = []
 
     for iteration in range(MAX_ITERATIONS):
-        # ── THINK: Send everything to Gemini and ask what to do ──
-        response = model.generate_content(
-            [{"role": "user", "parts": [system_prompt]}] + conversation
-        )
-
-        raw_response = response.text.strip()
+        # ── THINK: Send everything to the AI and ask what to do ──
+        full_prompt = "\n".join(messages)
+        raw_response = generate(full_prompt)
 
         # ── Parse the response ──
         try:
             decision = parse_agent_response(raw_response)
-        except (json.JSONDecodeError, IndexError):
-            # If Gemini returns garbage, record it and try once more
+        except (json.JSONDecodeError, IndexError, ValueError):
+            # If AI returns garbage, record it and try once more
             steps.append({
                 "iteration": iteration + 1,
                 "thought": "Failed to parse response",
-                "raw_response": raw_response,
+                "raw_response": raw_response[:500],
                 "action": "parse_error",
             })
-            conversation.append({"role": "model", "parts": [raw_response]})
-            conversation.append({"role": "user", "parts": [
-                "Your response was not valid JSON. Please respond with ONLY a JSON object as specified in the instructions."
-            ]})
+            messages.append(f"\nAssistant: {raw_response}\n")
+            messages.append(
+                "\nYour response was not valid JSON. Please respond with ONLY a JSON object "
+                "as specified in the instructions. No markdown, no extra text.\n"
+            )
             continue
 
         thought = decision.get("thought", "")
@@ -198,15 +201,16 @@ def run(goal: str) -> dict:
         tool = get_tool_by_name(action)
         if not tool:
             # Agent tried to call a tool that doesn't exist
-            error_msg = f"Tool '{action}' does not exist. Available tools: {', '.join(t['name'] for t in __import__('modules.tools', fromlist=['TOOLS']).TOOLS)}"
+            available = ", ".join(t["name"] for t in TOOLS)
+            error_msg = f"Tool '{action}' does not exist. Available tools: {available}"
             steps.append({
                 "iteration": iteration + 1,
                 "thought": thought,
                 "action": action,
                 "result": {"status": "error", "message": error_msg},
             })
-            conversation.append({"role": "model", "parts": [raw_response]})
-            conversation.append({"role": "user", "parts": [f"Tool result: {error_msg}"]})
+            messages.append(f"\nAssistant: {raw_response}\n")
+            messages.append(f"\nTool result: {error_msg}\n")
             continue
 
         # Execute the tool
@@ -227,12 +231,11 @@ def run(goal: str) -> dict:
         }
         steps.append(step_record)
 
-        # Add this exchange to the conversation so the agent sees
+        # Add this exchange to the conversation so the AI sees
         # what happened and can decide the next step
-        conversation.append({"role": "model", "parts": [raw_response]})
-        conversation.append({"role": "user", "parts": [
-            f"Tool '{action}' returned:\n{json.dumps(result, indent=2, default=str)}"
-        ]})
+        result_str = json.dumps(result, indent=2, default=str)
+        messages.append(f"\nAssistant: {raw_response}\n")
+        messages.append(f"\nTool '{action}' returned:\n{result_str}\n")
 
     # If we hit the iteration limit, force a stop
     save_session(goal, tools_used, "Agent reached maximum iterations without completing.")
@@ -248,15 +251,13 @@ def run(goal: str) -> dict:
 def _sanitize_state(state: dict) -> dict:
     """
     Clean up the state for the API response.
-    Remove very large fields (like full PDF text) to keep the response manageable.
+    Remove very large fields to keep the response manageable.
     """
     clean = {}
     for key, value in state.items():
         if key == "identity":
-            # Don't dump the entire identity (it has the full PDF text)
             clean[key] = {"loaded": True, "name": value.get("personal", {}).get("name", "Unknown")}
         elif key == "tailored_resume":
-            # Include resume but truncate if huge
             clean[key] = {k: v for k, v in value.items() if k != "company_research"}
         else:
             clean[key] = value
