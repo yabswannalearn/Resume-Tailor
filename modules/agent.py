@@ -37,19 +37,20 @@ Works with both Ollama (local Qwen3) and Gemini (cloud).
 
 import json
 from modules.ai_provider import generate
-from modules.tools import get_tool_descriptions, get_tool_by_name, TOOLS
+from modules.tools import get_tool_descriptions, get_tool_by_name, get_active_tools
 from modules.memory import format_memory_for_prompt, save_session
 
 # Maximum number of reasoning steps before the agent is forced to stop.
 MAX_ITERATIONS = 10
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(config: dict = None) -> str:
     """
     Build the system prompt that tells the AI HOW to be an agent.
+    Config controls which toggleable tools are available.
     """
 
-    tool_descriptions = get_tool_descriptions()
+    tool_descriptions = get_tool_descriptions(config)
     memory_context = format_memory_for_prompt()
 
     return f"""You are an AI Resume Tailor Agent. You help users create tailored resumes, review their CVs, and research companies — all through natural language.
@@ -122,12 +123,16 @@ def parse_agent_response(raw_text: str) -> dict:
     return json.loads(text)
 
 
-def run(goal: str) -> dict:
+def run(goal: str, config: dict = None) -> dict:
     """
     Main agent entry point.
 
     Takes a natural language goal from the user and runs the ReAct loop
     until the agent decides it's done or hits the iteration limit.
+
+    Args:
+        goal: Natural language goal from the user
+        config: Optional dict to toggle tools, e.g. {"brave_search": False}
 
     Returns a dict with:
         - steps: list of all reasoning steps (thought + action + result)
@@ -137,7 +142,7 @@ def run(goal: str) -> dict:
     """
 
     # The system prompt defines the agent's identity and tools
-    system_prompt = build_system_prompt()
+    system_prompt = build_system_prompt(config)
 
     # Conversation history — grows as the agent calls tools
     messages = [system_prompt, f"\nMy goal: {goal}\n"]
@@ -198,10 +203,10 @@ def run(goal: str) -> dict:
             }
 
         # ── ACT: Call the requested tool ──
-        tool = get_tool_by_name(action)
+        tool = get_tool_by_name(action, config)
         if not tool:
             # Agent tried to call a tool that doesn't exist
-            available = ", ".join(t["name"] for t in TOOLS)
+            available = ", ".join(t["name"] for t in get_active_tools(config))
             error_msg = f"Tool '{action}' does not exist. Available tools: {available}"
             steps.append({
                 "iteration": iteration + 1,

@@ -171,36 +171,42 @@ TOOLS = [
             "job_input": "URL or raw text of the job description (required)"
         },
         "function": tool_analyze_job,
+        "toggleable": False,
     },
     {
         "name": "load_identity",
         "description": "Load the user's full identity profile from all sources (YAML profile, PDF resume, GitHub repos, portfolio website). No parameters needed. Must be called before build_resume or review_resume.",
         "parameters": {},
         "function": tool_load_identity,
+        "toggleable": False,
     },
     {
         "name": "research_company",
         "description": "Research the target company by scraping their website and summarizing what they do, their culture, and why they could be a good fit. Requires analyze_job to have been called first.",
         "parameters": {},
         "function": tool_research_company,
+        "toggleable": False,
     },
     {
         "name": "build_resume",
         "description": "Build a tailored resume by combining the job analysis and user identity. Produces a structured resume with tailored summary, reordered skills, customized experience bullets, and relevant projects. Requires both analyze_job and load_identity to have been called first.",
         "parameters": {},
         "function": tool_build_resume,
+        "toggleable": False,
     },
     {
         "name": "generate_pdf",
         "description": "Generate a professional PDF from the tailored resume. Requires build_resume to have been called first. Outputs the PDF to the output/ directory.",
         "parameters": {},
         "function": tool_generate_pdf,
+        "toggleable": False,
     },
     {
         "name": "review_resume",
         "description": "Review the user's current CV against a target job description. Returns section-by-section scores, tips, missing keywords, and quick wins. Requires both analyze_job and load_identity to have been called first. Use this when the user wants feedback on their existing CV rather than generating a new one.",
         "parameters": {},
         "function": tool_review_resume,
+        "toggleable": False,
     },
     {
         "name": "search_ddg",
@@ -209,6 +215,7 @@ TOOLS = [
             "query": "The search query string (required)"
         },
         "function": tool_search_ddg,
+        "toggleable": False,
     },
     {
         "name": "search_brave",
@@ -217,22 +224,58 @@ TOOLS = [
             "query": "The search query string (required)"
         },
         "function": tool_search_brave,
+        "toggleable": True,  # Can be toggled on/off from frontend
+        "toggle_key": "brave_search",  # The key used in config dict
     },
 ]
 
 
-def get_tool_descriptions() -> str:
+def get_active_tools(config: dict = None) -> list:
+    """
+    Return the list of currently active tools based on config.
+
+    Config is a dict like {"brave_search": True/False}.
+    If no config is passed, falls back to .env defaults.
+
+    This is how the frontend will toggle tools on/off:
+    - POST /resume/agent {"goal": "...", "config": {"brave_search": false}}
+    """
+    if config is None:
+        config = {}
+
+    # Default: check .env for ENABLE_BRAVE_SEARCH
+    default_brave = os.getenv("ENABLE_BRAVE_SEARCH", "true").lower() == "true"
+
+    active = []
+    for tool in TOOLS:
+        if tool.get("toggleable") and tool.get("toggle_key"):
+            # Check config first (frontend override), then .env default
+            key = tool["toggle_key"]
+            if key == "brave_search":
+                enabled = config.get(key, default_brave)
+            else:
+                enabled = config.get(key, True)
+
+            if not enabled:
+                continue
+
+        active.append(tool)
+
+    return active
+
+
+def get_tool_descriptions(config: dict = None) -> str:
     """Format tool descriptions for the agent's system prompt."""
     lines = []
-    for tool in TOOLS:
+    for tool in get_active_tools(config):
         params = ", ".join(f"{k}: {v}" for k, v in tool["parameters"].items()) if tool["parameters"] else "none"
         lines.append(f"- **{tool['name']}** — {tool['description']}\n  Parameters: {params}")
     return "\n".join(lines)
 
 
-def get_tool_by_name(name: str):
-    """Look up a tool by name. Returns the tool dict or None."""
-    for tool in TOOLS:
+def get_tool_by_name(name: str, config: dict = None):
+    """Look up a tool by name from active tools. Returns the tool dict or None."""
+    for tool in get_active_tools(config):
         if tool["name"] == name:
             return tool
     return None

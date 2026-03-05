@@ -89,6 +89,7 @@ from modules import agent
 
 class AgentInput(BaseModel):
     goal: str  # e.g. "Tailor my resume for this job posting: https://..."
+    config: Optional[dict] = None  # e.g. {"brave_search": false} to disable Brave
 
 
 @router.post("/agent")
@@ -97,6 +98,9 @@ def agent_endpoint(body: AgentInput):
     Natural language agent endpoint.
     Give it a goal and the agent decides which tools to call,
     in what order, adapting based on results.
+
+    Optional config to toggle tools from the frontend:
+    {"goal": "...", "config": {"brave_search": false}}
     """
-    result = agent.run(body.goal)
+    result = agent.run(body.goal, config=body.config)
     return result
