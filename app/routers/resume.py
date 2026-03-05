@@ -1,11 +1,32 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
+from typing import Optional, List
 from modules import job_analyzer, identity_loader, resume_builder
 
 router = APIRouter(prefix="/resume", tags=["Resume"])
 
+
 class JobInput(BaseModel):
     job_input: str
+
+
+class JobData(BaseModel):
+    job_title: str
+    company_name: str
+    location: str
+    employment_type: Optional[str] = None
+    experience_required: Optional[str] = None
+    required_skills: List[str] = []
+    nice_to_have_skills: List[str] = []
+    responsibilities: List[str] = []
+    qualifications: List[str] = []
+    tone: str
+    summary: str
+
+
+class GenerateInput(BaseModel):
+    job_data: JobData
+
 
 @router.post("/analyze-job")
 def analyze_job(body: JobInput):
@@ -14,15 +35,11 @@ def analyze_job(body: JobInput):
 
 
 @router.post("/generate")
-def generate_resume(body: JobInput):
-    #analyze
-    job_data = job_analyzer.analyze(body.job_input)
-    #load identity
+def generate_resume(body: GenerateInput):
     identity_data = identity_loader.load()
-    #build the resume
-    tailored_resume = resume_builder.build(job_data, identity_data)
-
+    tailored_resume = resume_builder.build(body.job_data.model_dump(), identity_data)
     return tailored_resume
+
 
 @router.get("/load-identity")
 def load_identity():
