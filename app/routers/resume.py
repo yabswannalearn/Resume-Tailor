@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 from typing import Optional, List
-from modules import job_analyzer, identity_loader, resume_builder
+from modules import job_analyzer, identity_loader, resume_builder, company_researcher
 
 router = APIRouter(prefix="/resume", tags=["Resume"])
 
@@ -34,14 +34,30 @@ def analyze_job(body: JobInput):
     return result
 
 
-@router.post("/generate")
-def generate_resume(body: GenerateInput):
-    identity_data = identity_loader.load()
-    tailored_resume = resume_builder.build(body.job_data.model_dump(), identity_data)
-    return tailored_resume
-
-
 @router.get("/load-identity")
 def load_identity():
     result = identity_loader.load()
     return result
+
+
+@router.post("/research-company")
+def research_company(body: GenerateInput):
+    result = company_researcher.research(body.job_data.model_dump())
+    return result
+
+
+@router.post("/generate")
+def generate_resume(body: GenerateInput):
+    # Step 1: Load identity
+    identity_data = identity_loader.load()
+
+    # Step 2: Build tailored resume
+    tailored_resume = resume_builder.build(body.job_data.model_dump(), identity_data)
+
+    # Step 3: Research the company
+    company_summary = company_researcher.research(body.job_data.model_dump())
+
+    # Step 4: Attach company summary to the resume output
+    tailored_resume["company_research"] = company_summary
+
+    return tailored_resume
