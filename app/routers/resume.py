@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List
 from modules import job_analyzer, identity_loader, resume_builder, company_researcher, pdf_generator
@@ -80,27 +80,30 @@ def review_cv(body: GenerateInput):
     return tips
 
 
-# ─── Agent Endpoint ───────────────────────────────────────
-# This is the new "brain" endpoint. Instead of calling specific
-# pipeline steps, you just tell the agent what you want in
-# plain English, and it figures out the rest.
+# ─── Agent Endpoints ──────────────────────────────────────
 
 from modules import agent
 
 class AgentInput(BaseModel):
-    goal: str  # e.g. "Tailor my resume for this job posting: https://..."
-    config: Optional[dict] = None  # e.g. {"brave_search": false} to disable Brave
+    goal: str
+    config: Optional[dict] = None
 
 
 @router.post("/agent")
 def agent_endpoint(body: AgentInput):
-    """
-    Natural language agent endpoint.
-    Give it a goal and the agent decides which tools to call,
-    in what order, adapting based on results.
-
-    Optional config to toggle tools from the frontend:
-    {"goal": "...", "config": {"brave_search": false}}
-    """
+    """Original non-streaming agent endpoint (returns all at once)."""
     result = agent.run(body.goal, config=body.config)
     return result
+
+
+@router.post("/agent/stream")
+def agent_stream_endpoint(body: AgentInput):
+    """
+    Streaming agent endpoint — sends steps in real-time via SSE.
+    Each line is a JSON event the frontend can parse and display
+    as the agent thinks.
+    """
+    return StreamingResponse(
+        agent.run_streaming(body.goal, config=body.config),
+        media_type="text/event-stream",
+    )

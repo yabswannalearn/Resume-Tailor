@@ -267,3 +267,113 @@ def _sanitize_state(state: dict) -> dict:
         else:
             clean[key] = value
     return clean
+
+
+def run_streaming(goal: str, config: dict = None):
+    """
+    Streaming version of run().
+
+    Instead of returning one big dict at the end, this YIELDS
+    JSON events after each reasoning step. The frontend can
+    display each step in real-time as it arrives.
+
+    Each yielded event is a JSON string with a "type" field:
+    - {"type": "thinking", "iteration": 1}             — agent is about to think
+    - {"type": "step", "iteration": 1, "thought": ..., "action": ..., "result": ...}
+    - {"type": "error", "iteration": 1, "message": ...}
+    - {"type": "done", "summary": ..., "pdf_path": ...}
+    """
+
+    system_prompt = build_system_prompt(config)
+    messages = [system_prompt, f"\nMy goal: {goal}\n"]
+    state = {}
+    steps = []
+    tools_used = []
+
+    for iteration in range(MAX_ITERATIONS):
+        # Signal that the agent is thinking
+        yield json.dumps({
+            "type": "thinking",
+            "iteration": iteration + 1,
+        }) + "\n"
+
+        # ── THINK ──
+        full_prompt = "\n".join(messages)
+        raw_response = generate(full_prompt)
+
+        # ── Parse ──
+        try:
+            decision = parse_agent_response(raw_response)
+        except (json.JSONDecodeError, IndexError, ValueError):
+            yield json.dumps({
+                "type": "error",
+                "iteration": iteration + 1,
+                "message": "Failed to parse AI response, retrying...",
+            }) + "\n"
+            messages.append(f"\nAssistant: {raw_response}\n")
+            messages.append(
+                "\nYour response was not valid JSON. Please respond with ONLY a JSON object "
+                "as specified in the instructions. No markdown, no extra text.\n"
+            )
+            continue
+
+        thought = decision.get("thought", "")
+        action = decision.get("action", "")
+
+        # ── FINAL ANSWER ──
+        if action == "final_answer":
+            summary = decision.get("summary", "Task completed.")
+            save_session(goal, tools_used, summary)
+
+            yield json.dumps({
+                "type": "done",
+                "iteration": iteration + 1,
+                "thought": thought,
+                "summary": summary,
+                "pdf_path": state.get("pdf_path"),
+            }) + "\n"
+            return
+
+        # ── ACT ──
+        tool = get_tool_by_name(action, config)
+        if not tool:
+            available = ", ".join(t["name"] for t in get_active_tools(config))
+            error_msg = f"Tool '{action}' does not exist. Available: {available}"
+            yield json.dumps({
+                "type": "error",
+                "iteration": iteration + 1,
+                "message": error_msg,
+            }) + "\n"
+            messages.append(f"\nAssistant: {raw_response}\n")
+            messages.append(f"\nTool result: {error_msg}\n")
+            continue
+
+        # Execute tool
+        try:
+            args = decision.get("args", {})
+            result = tool["function"](state, args)
+        except Exception as e:
+            result = {"status": "error", "message": str(e)}
+
+        tools_used.append(action)
+
+        # ── OBSERVE: yield the step to the frontend ──
+        yield json.dumps({
+            "type": "step",
+            "iteration": iteration + 1,
+            "thought": thought,
+            "action": action,
+            "result": result,
+        }, default=str) + "\n"
+
+        result_str = json.dumps(result, indent=2, default=str)
+        messages.append(f"\nAssistant: {raw_response}\n")
+        messages.append(f"\nTool '{action}' returned:\n{result_str}\n")
+
+    # Hit iteration limit
+    save_session(goal, tools_used, "Agent reached maximum iterations.")
+    yield json.dumps({
+        "type": "done",
+        "summary": "Reached maximum reasoning steps.",
+        "pdf_path": state.get("pdf_path"),
+    }) + "\n"
