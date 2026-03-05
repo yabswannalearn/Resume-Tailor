@@ -9,7 +9,7 @@ load_dotenv()
 
 # File paths
 PROFILE_PATH = "identity/profile.yaml"
-RESUME_PATH = "identity/my_resume.pdf"
+RESUME_PATH = "identity/Reinael Yabut CV.pdf"
 
 
 def load_yaml() -> dict:
