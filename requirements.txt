@@ -1,0 +1,10 @@
+google-generativeai
+pymupdf
+requests
+beautifulsoup4
+pyyaml
+weasyprint
+fastapi
+uvicorn
+python-multipart
+python-dotenv
