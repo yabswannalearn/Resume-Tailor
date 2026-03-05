@@ -22,8 +22,45 @@ def fetch_job_from_url(url: str) -> str:
     return soup.get_text(separator="\n", strip=True)
 
 
+def format_job_text(raw_text: str) -> str:
+    """
+    Pre-processing agent.
+    Takes messy raw job description text and normalizes it
+    into clean, consistently structured plain text.
+    """
+    prompt = f"""
+    You are a text formatting assistant.
+
+    The text below is a raw job description. It may be messy, 
+    have inconsistent spacing, broken formatting, or extra noise.
+
+    Your job is to:
+    1. Clean up the formatting and whitespace
+    2. Keep ALL the original information — do not remove anything important
+    3. Organize it into clear sections:
+       - Job Title & Company
+       - About the Company
+       - About the Role
+       - Responsibilities
+       - Required Skills
+       - Nice to Have
+       - Benefits
+    4. Output clean, readable plain text only
+    5. Remove any duplicate or redundant lines
+
+    Raw Job Description:
+    {raw_text}
+
+    Return only the cleaned text, no commentary.
+    """
+
+    response = model.generate_content(prompt)
+    return response.text.strip()
+
+
 def analyze(job_input: str) -> dict:
     """
+    Main function.
     Accepts either a URL or raw job description text.
     Returns a structured dict of the job details.
     """
@@ -34,7 +71,10 @@ def analyze(job_input: str) -> dict:
     else:
         raw_text = job_input
 
-    # Step 2: Build the prompt
+    # Step 2: Clean and normalize the text first
+    cleaned_text = format_job_text(raw_text)
+
+    # Step 3: Build the analysis prompt using the CLEANED text
     prompt = f"""
     You are a job description analyst.
 
@@ -55,13 +95,13 @@ def analyze(job_input: str) -> dict:
     }}
 
     Job Description:
-    {raw_text}
+    {cleaned_text}
     """
 
-    # Step 3: Call Gemini
+    # Step 4: Call Gemini
     response = model.generate_content(prompt)
 
-    # Step 4: Clean and parse JSON response
+    # Step 5: Clean and parse JSON response
     raw_response = response.text.strip()
 
     if raw_response.startswith("```"):
