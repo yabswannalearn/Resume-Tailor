@@ -9,3 +9,5 @@ uvicorn
 python-multipart
 python-dotenv
 pymongo[srv]
+ollama
+duckduckgo-search
