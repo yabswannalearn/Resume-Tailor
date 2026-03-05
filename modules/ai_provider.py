@@ -86,15 +86,17 @@ def _generate_gemini(prompt: str) -> str:
     """
     Call Google's Gemini API.
 
-    Uses the google-generativeai SDK, same as before.
+    Uses the new google-genai SDK.
     The API key and model name come from .env.
     """
-    import google.generativeai as genai
+    from google import genai
 
-    genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-    response = model.generate_content(prompt)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=prompt,
+    )
     return response.text.strip()
 
 

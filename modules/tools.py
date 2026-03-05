@@ -215,7 +215,8 @@ TOOLS = [
             "query": "The search query string (required)"
         },
         "function": tool_search_ddg,
-        "toggleable": False,
+        "toggleable": True,
+        "toggle_key": "web_search",
     },
     {
         "name": "search_brave",
@@ -224,8 +225,8 @@ TOOLS = [
             "query": "The search query string (required)"
         },
         "function": tool_search_brave,
-        "toggleable": True,  # Can be toggled on/off from frontend
-        "toggle_key": "brave_search",  # The key used in config dict
+        "toggleable": True,
+        "toggle_key": "web_search",
     },
 ]
 
@@ -243,19 +244,14 @@ def get_active_tools(config: dict = None) -> list:
     if config is None:
         config = {}
 
-    # Default: check .env for ENABLE_BRAVE_SEARCH
-    default_brave = os.getenv("ENABLE_BRAVE_SEARCH", "true").lower() == "true"
+    # Default: check .env for ENABLE_WEB_SEARCH
+    default_web_search = os.getenv("ENABLE_WEB_SEARCH", "true").lower() == "true"
 
     active = []
     for tool in TOOLS:
         if tool.get("toggleable") and tool.get("toggle_key"):
-            # Check config first (frontend override), then .env default
             key = tool["toggle_key"]
-            if key == "brave_search":
-                enabled = config.get(key, default_brave)
-            else:
-                enabled = config.get(key, True)
-
+            enabled = config.get(key, default_web_search)
             if not enabled:
                 continue
 

@@ -3,11 +3,16 @@ Streamlit Frontend for Resume Tailor Agent.
 
 Run with: streamlit run frontend.py
 Make sure the backend is running: uvicorn app.main:app --reload
+
+STREAMING VERSION:
+Uses the /agent/stream endpoint to show each reasoning step
+in real-time as the agent works, instead of waiting for everything.
 """
 
 import streamlit as st
 import requests
 import json
+import time
 
 # ─── Config ───────────────────────────────────────────────
 API_BASE = "http://localhost:8000"
@@ -62,65 +67,6 @@ st.markdown("""
         letter-spacing: 0.5px;
     }
 
-    /* Step cards */
-    .step-card {
-        background: #1e1e2e;
-        border: 1px solid #313244;
-        border-radius: 12px;
-        padding: 1rem 1.2rem;
-        margin-bottom: 0.8rem;
-    }
-    .step-header {
-        display: flex;
-        align-items: center;
-        gap: 0.5rem;
-        margin-bottom: 0.5rem;
-    }
-    .step-number {
-        background: linear-gradient(135deg, #89b4fa, #74c7ec);
-        color: #1e1e2e;
-        font-weight: 700;
-        font-size: 0.75rem;
-        padding: 0.15rem 0.5rem;
-        border-radius: 20px;
-    }
-    .step-action {
-        color: #cba6f7;
-        font-weight: 600;
-        font-size: 0.85rem;
-    }
-    .step-thought {
-        color: #a6adc8;
-        font-size: 0.82rem;
-        font-style: italic;
-        margin-bottom: 0.3rem;
-    }
-
-    /* Final answer */
-    .final-card {
-        background: linear-gradient(135deg, #1e3a2f, #1e2e1e);
-        border: 1px solid #a6e3a1;
-        border-radius: 12px;
-        padding: 1.2rem 1.5rem;
-        margin-top: 1rem;
-    }
-    .final-card h4 {
-        color: #a6e3a1;
-        margin: 0 0 0.5rem 0;
-    }
-    .final-card p {
-        color: #cdd6f4;
-        line-height: 1.6;
-    }
-
-    /* Sidebar */
-    section[data-testid="stSidebar"] {
-        background: #181825;
-    }
-    section[data-testid="stSidebar"] .stMarkdown h3 {
-        color: #cdd6f4;
-    }
-
     /* Status indicator */
     .status-dot {
         display: inline-block;
@@ -146,68 +92,17 @@ def check_backend():
         return False
 
 
-def run_agent(goal: str, config: dict) -> dict:
-    """Send a goal to the agent endpoint."""
-    response = requests.post(
-        f"{API_BASE}/resume/agent",
-        json={"goal": goal, "config": config},
-        timeout=300,  # Agent can take a while with local models
-    )
-    return response.json()
-
-
-def render_step(step: dict, index: int):
-    """Render an agent reasoning step as a styled card."""
-    action = step.get("action", "unknown")
-    thought = step.get("thought", "")
-
-    if action == "final_answer":
-        summary = step.get("summary", "")
-        st.markdown(f"""
-        <div class="final-card">
-            <h4>✅ Agent Complete</h4>
-            <p>{summary}</p>
-        </div>
-        """, unsafe_allow_html=True)
-    elif action == "parse_error":
-        st.markdown(f"""
-        <div class="step-card" style="border-color: #f38ba8;">
-            <div class="step-header">
-                <span class="step-number">Step {index}</span>
-                <span class="step-action" style="color: #f38ba8;">⚠️ Parse Error</span>
-            </div>
-            <div class="step-thought">Retrying...</div>
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        # Tool icon mapping
-        icons = {
-            "analyze_job": "🔍",
-            "load_identity": "👤",
-            "research_company": "🏢",
-            "build_resume": "📝",
-            "generate_pdf": "📄",
-            "review_resume": "📋",
-            "search_ddg": "🦆",
-            "search_brave": "🦁",
-        }
-        icon = icons.get(action, "🔧")
-
-        st.markdown(f"""
-        <div class="step-card">
-            <div class="step-header">
-                <span class="step-number">Step {index}</span>
-                <span class="step-action">{icon} {action}</span>
-            </div>
-            <div class="step-thought">💭 {thought}</div>
-        </div>
-        """, unsafe_allow_html=True)
-
-        # Show result in a collapsible
-        result = step.get("result", {})
-        if result:
-            with st.expander(f"View {action} result", expanded=False):
-                st.json(result)
+# Tool icon mapping
+TOOL_ICONS = {
+    "analyze_job": "🔍",
+    "load_identity": "👤",
+    "research_company": "🏢",
+    "build_resume": "📝",
+    "generate_pdf": "📄",
+    "review_resume": "📋",
+    "search_ddg": "🦆",
+    "search_brave": "🦁",
+}
 
 
 # ─── Sidebar ──────────────────────────────────────────────
@@ -227,9 +122,8 @@ with st.sidebar:
 
     # Tool toggles
     st.markdown("### 🔧 Search Tools")
-    brave_enabled = st.toggle("🦁 Brave Search", value=True, help="Toggle Brave Search on/off")
-    st.caption("Brave: Higher quality results (2,000 free/month)")
-    st.caption("DuckDuckGo: Always available, unlimited, free")
+    web_search_enabled = st.toggle("🔍 Web Search", value=True, help="Enable or disable web search (Brave + DuckDuckGo)")
+    st.caption("When enabled, the agent can search the web for company info, salary data, etc.")
 
     st.divider()
 
@@ -262,7 +156,7 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
-# Initialize session state for chat history
+# Initialize session state
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
@@ -273,63 +167,128 @@ for msg in st.session_state.messages:
             st.write(msg["content"])
     elif msg["role"] == "agent":
         with st.chat_message("assistant", avatar="🤖"):
-            if msg.get("steps"):
-                for i, step in enumerate(msg["steps"], 1):
-                    render_step(step, i)
+            # Show steps from history
+            for step in msg.get("steps", []):
+                if step["type"] == "step":
+                    icon = TOOL_ICONS.get(step.get("action", ""), "🔧")
+                    st.info(f"**Step {step['iteration']}** — {icon} `{step['action']}`\n\n💭 _{step.get('thought', '')}_")
+                    with st.expander(f"View {step['action']} result"):
+                        st.json(step.get("result", {}))
+            # Show final answer
+            if msg.get("summary"):
+                st.success(f"✅ **Agent Complete**\n\n{msg['summary']}")
             if msg.get("pdf_path"):
                 st.success(f"📄 PDF generated: `{msg['pdf_path']}`")
+
+# Handle quick action presets
+if quick_action == "Tailor my resume for a job":
+    st.info("💡 Paste a job description or URL in the chat box below, starting with: **Tailor my resume for this job:**")
+elif quick_action == "Review my current CV":
+    st.info("💡 Paste a job description in the chat box, starting with: **Review my CV against this job:**")
+elif quick_action == "Research a company":
+    st.info("💡 Type in the chat box: **Research [company name] and tell me about them**")
 
 # Chat input
 goal = st.chat_input("What would you like me to do? (e.g., 'Tailor my resume for...')")
 
-# Handle quick action presets
-if quick_action == "Tailor my resume for a job" and not goal:
-    st.info("💡 Paste a job description or URL in the chat box below, starting with: **Tailor my resume for this job:**")
-elif quick_action == "Review my current CV" and not goal:
-    st.info("💡 Paste a job description in the chat box, starting with: **Review my CV against this job:**")
-elif quick_action == "Research a company" and not goal:
-    st.info("💡 Type in the chat box: **Research [company name] and tell me about them**")
-
 # Process new input
 if goal:
-    # Add user message to history
+    # Add user message
     st.session_state.messages.append({"role": "user", "content": goal})
 
     with st.chat_message("user"):
         st.write(goal)
 
-    # Run the agent
+    # Run the agent with streaming
     with st.chat_message("assistant", avatar="🤖"):
         if not backend_online:
             st.error("Backend is offline. Start it first!")
         else:
-            config = {"brave_search": brave_enabled}
+            config = {"web_search": web_search_enabled}
 
-            with st.spinner("🤖 Agent is thinking..."):
-                try:
-                    result = run_agent(goal, config)
+            # Container for live steps
+            status_container = st.empty()
+            steps_container = st.container()
+            final_container = st.empty()
 
-                    steps = result.get("steps", [])
-                    summary = result.get("final_summary", "")
-                    pdf_path = result.get("pdf_path")
+            collected_steps = []
+            final_summary = ""
+            pdf_path = None
 
-                    # Render each step
-                    for i, step in enumerate(steps, 1):
-                        render_step(step, i)
+            try:
+                # Stream from the backend
+                response = requests.post(
+                    f"{API_BASE}/resume/agent/stream",
+                    json={"goal": goal, "config": config},
+                    stream=True,
+                    timeout=300,
+                )
 
-                    # PDF download button
-                    if pdf_path:
-                        st.success(f"📄 PDF generated: `{pdf_path}`")
+                for line in response.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
 
-                    # Save to session state
-                    st.session_state.messages.append({
-                        "role": "agent",
-                        "content": summary,
-                        "steps": steps,
-                        "pdf_path": pdf_path,
-                    })
+                    try:
+                        event = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
 
-                except requests.exceptions.Timeout:
-                    st.error("⏱️ The agent took too long to respond. The local model might be slow on this task. Try a simpler goal.")
-                except Exception as e:
-                    st.error(f"❌ Error: {str(e)}")
+                    event_type = event.get("type", "")
+                    iteration = event.get("iteration", "?")
+
+                    if event_type == "thinking":
+                        # Show pulsing "thinking" status
+                        status_container.warning(f"🧠 **Step {iteration}** — Agent is thinking...")
+
+                    elif event_type == "step":
+                        # Clear the "thinking" status
+                        status_container.empty()
+
+                        action = event.get("action", "unknown")
+                        thought = event.get("thought", "")
+                        result = event.get("result", {})
+                        icon = TOOL_ICONS.get(action, "🔧")
+
+                        # Display the step live
+                        with steps_container:
+                            st.info(f"**Step {iteration}** — {icon} `{action}`\n\n💭 _{thought}_")
+                            with st.expander(f"View {action} result"):
+                                st.json(result)
+
+                        collected_steps.append(event)
+
+                    elif event_type == "error":
+                        status_container.empty()
+                        with steps_container:
+                            st.warning(f"⚠️ **Step {iteration}** — {event.get('message', 'Error')}")
+                        collected_steps.append(event)
+
+                    elif event_type == "done":
+                        status_container.empty()
+                        final_summary = event.get("summary", "Task completed.")
+                        pdf_path = event.get("pdf_path")
+
+                        final_container.success(f"✅ **Agent Complete**\n\n{final_summary}")
+                        if pdf_path:
+                            st.success(f"📄 PDF generated: `{pdf_path}`")
+
+                        collected_steps.append(event)
+
+                # Save to session state for history
+                st.session_state.messages.append({
+                    "role": "agent",
+                    "content": final_summary,
+                    "steps": collected_steps,
+                    "summary": final_summary,
+                    "pdf_path": pdf_path,
+                })
+
+            except requests.exceptions.Timeout:
+                status_container.empty()
+                st.error("⏱️ The agent took too long to respond. Try a simpler goal.")
+            except requests.exceptions.ConnectionError:
+                status_container.empty()
+                st.error("❌ Can't connect to backend. Make sure it's running.")
+            except Exception as e:
+                status_container.empty()
+                st.error(f"❌ Error: {str(e)}")
