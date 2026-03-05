@@ -119,3 +119,87 @@ def build(job_data: dict, identity_data: dict) -> dict:
             raw_response = raw_response[4:]
 
     return json.loads(raw_response)
+
+def review(identity_data: dict, job_data: dict) -> dict:
+    """
+    Reviews the user's current CV against a job description.
+    Returns section-by-section tips in plain text — no PDF.
+    """
+
+    prompt = f"""
+    You are an expert career coach and CV reviewer.
+
+    Review the candidate's current CV against the target job description below.
+    Give specific, actionable tips for each section of THEIR CV.
+
+    ## CANDIDATE'S CURRENT CV
+    {identity_data["pdf_resume_text"]}
+
+    ## TARGET JOB
+    Title: {job_data["job_title"]}
+    Company: {job_data["company_name"]}
+    Required Skills: {job_data["required_skills"]}
+    Responsibilities: {job_data["responsibilities"]}
+    Tone: {job_data["tone"]}
+
+    ## YOUR TASK
+    Go through each section of their CV and give tips on:
+    - What's working well
+    - What to improve or reword
+    - What's missing that the job requires
+    - What to remove or deprioritize for THIS job
+
+    Return ONLY a valid JSON object, no extra text:
+
+    {{
+        "overall_score": "X/10",
+        "overall_summary": "2-3 sentence overall assessment",
+        "sections": {{
+            "introduction": {{
+                "current": "quote or paraphrase their current summary",
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }},
+            "experience": {{
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }},
+            "technical_skills": {{
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }},
+            "projects": {{
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }},
+            "education": {{
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }},
+            "certifications": {{
+                "score": "X/10",
+                "whats_working": "...",
+                "tips": ["tip 1", "tip 2"]
+            }}
+        }},
+        "missing_keywords": ["keyword 1", "keyword 2"],
+        "quick_wins": ["easy change 1", "easy change 2", "easy change 3"]
+    }}
+    """
+
+    response = model.generate_content(prompt)
+
+    raw_response = response.text.strip()
+
+    if raw_response.startswith("```"):
+        raw_response = raw_response.split("```")[1]
+        if raw_response.startswith("json"):
+            raw_response = raw_response[4:]
+
+    import json
+    return json.loads(raw_response)

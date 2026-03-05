@@ -1,7 +1,8 @@
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from typing import Optional, List
-from modules import job_analyzer, identity_loader, resume_builder, company_researcher
+from modules import job_analyzer, identity_loader, resume_builder, company_researcher, pdf_generator
 
 router = APIRouter(prefix="/resume", tags=["Resume"])
 
@@ -54,10 +55,26 @@ def generate_resume(body: GenerateInput):
     # Step 2: Build tailored resume
     tailored_resume = resume_builder.build(body.job_data.model_dump(), identity_data)
 
-    # Step 3: Research the company
+    # Step 3: Research company
     company_summary = company_researcher.research(body.job_data.model_dump())
-
-    # Step 4: Attach company summary to the resume output
     tailored_resume["company_research"] = company_summary
 
-    return tailored_resume
+    # Step 4: Generate PDF
+    output_path = pdf_generator.generate(tailored_resume)
+
+    # Step 5: Return the PDF file directly
+    return FileResponse(
+        path=output_path,
+        media_type="application/pdf",
+        filename="tailored_resume.pdf"
+    )
+
+@router.post("/review")
+def review_cv(body: GenerateInput):
+    # Load your current CV
+    identity_data = identity_loader.load()
+
+    # Get section-by-section tips
+    tips = resume_builder.review(identity_data, body.job_data.model_dump())
+
+    return tips
