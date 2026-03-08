@@ -27,57 +27,121 @@ An AI-powered agent that autonomously tailors resumes, reviews CVs, and research
 ## 🏗️ Architecture
 
 ```
-┌─────────────────────┐     HTTP/SSE      ┌──────────────────────┐
-│   Streamlit Frontend │ ◄──────────────► │   FastAPI Backend     │
-│   (frontend.py)      │                  │   (app/main.py)       │
-└─────────────────────┘                   └──────────┬───────────┘
-                                                     │
-                                          ┌──────────▼───────────┐
-                                          │   Agent Core          │
-                                          │   (modules/agent.py)  │
-                                          │   ReAct Loop          │
-                                          └──────────┬───────────┘
-                                                     │
-                    ┌────────────────────────────────┬┴┬──────────────────────┐
-                    │              │              │    │              │        │
-              ┌─────▼────┐  ┌─────▼────┐  ┌─────▼──┐ │  ┌───────▼──┐ ┌─────▼────┐
-              │ Job       │  │ Identity  │  │ Resume │ │  │ Company  │ │ PDF      │
-              │ Analyzer  │  │ Loader    │  │ Builder│ │  │ Research │ │ Generator│
-              └──────────┘  └──────────┘  └────────┘ │  └──────────┘ └──────────┘
-                                                     │
-                                          ┌──────────▼───────────┐
-                                          │ Web Search (DDG/Brave)│
-                                          └──────────────────────┘
+┌─────────────────────┐         HTTP/SSE         ┌──────────────────────┐
+│  Streamlit Frontend │ ◄──────────────────────► │   FastAPI Backend    │
+│   (frontend.py)     │                          │   (app/main.py)      │
+└─────────────────────┘                          └──────────┬───────────┘
+                                                            │
+                                              ┌─────────────▼───────────┐
+                                              │   Agent Core (agent.py) │
+                                              │   ReAct Loop (10 max)   │
+                                              └──────────┬──────────────┘
+                          ┌───────────────────┬──────────┼──────────┬───────────────────┐
+                          │                   │          │          │                   │
+                  ┌───────▼────┐  ┌───────────▼─┐  ┌────▼───┐  ┌──▼───────┐  ┌────────▼─────┐
+                  │ Job        │  │ Identity     │  │ Resume │  │ Company  │  │ PDF          │
+                  │ Analyzer   │  │ Loader       │  │ Builder│  │ Research │  │ Generator    │
+                  └────────────┘  └─────────────┘  └────────┘  └──────────┘  └──────────────┘
+                                                            │
+                                              ┌─────────────▼───────────┐
+                                              │  MongoDB Session Memory  │
+                                              └─────────────────────────┘
 ```
+
+---
+
+## 🧠 How It Works
+
+### The ReAct Reasoning Loop
+
+Instead of a fixed pipeline, the agent uses a **ReAct (Reason + Act)** loop to dynamically decide what to do based on your goal. Here's what happens under the hood:
+
+```
+User goal: "Tailor my resume for this job: [URL]"
+     │
+     ▼
+┌─────────────────────────────────────────────────────────┐
+│  THINK: AI reads goal + available tools + past memory   │
+│  → decides to call: analyze_job(url=...)                │
+└─────────────────────────┬───────────────────────────────┘
+                          │ ACT
+                          ▼
+              [ analyze_job executes ]
+              [ stores data in state ]
+                          │ OBSERVE
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  THINK: AI sees job analysis result                     │
+│  → decides to call: load_identity()                     │
+└─────────────────────────┬───────────────────────────────┘
+                          │ ACT
+                          ▼
+              [ load_identity executes ]
+              [ reads YAML + PDF + GitHub + portfolio ]
+                          │ OBSERVE
+                          ▼
+         ... (continues calling tools as needed) ...
+                          │
+                          ▼
+┌─────────────────────────────────────────────────────────┐
+│  THINK: All data gathered, work is done                 │
+│  → action: "final_answer"                               │
+└─────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+              Session saved to MongoDB
+              PDF saved to output/
+```
+
+The agent responds in structured JSON each iteration:
+- **Tool call:** `{"action": "analyze_job", "args": {"url": "..."}, "thought": "why"}`
+- **Final answer:** `{"action": "final_answer", "summary": "...", "thought": "why done"}`
+
+A **shared `state` dictionary** is passed to every tool so they can read each other's results — for example, `build_resume` automatically reads `state["job_data"]` set by `analyze_job`.
+
+The loop runs a maximum of **10 iterations** to prevent infinite loops.
+
+### Available Tools
+
+| Tool | What it does |
+|---|---|
+| `analyze_job` | Fetches a job URL or parses raw text to extract title, skills, requirements, and tone |
+| `load_identity` | Loads your profile from `profile.yaml` + your PDF resume + GitHub API + portfolio site |
+| `research_company` | Scrapes the company website and web search results to build a culture summary |
+| `build_resume` | Generates a tailored resume using job data + your identity |
+| `generate_pdf` | Renders the tailored resume to a professional PDF using ReportLab |
+| `review_resume` | Reviews your CV section-by-section with a score and improvement tips |
+| `search_ddg` | DuckDuckGo web search (free, no key needed) |
+| `search_brave` | Brave Search API (higher quality, requires API key) |
 
 ---
 
 ## 📦 Project Structure
 
 ```
-Resume Tailor/
+Resume-Tailor/
 ├── app/
 │   ├── main.py              # FastAPI app entry point
 │   └── routers/
-│       └── resume.py         # API endpoints (REST + streaming)
+│       └── resume.py        # API endpoints (REST + streaming)
 ├── modules/
-│   ├── agent.py              # ReAct agent core (think → act → observe loop)
-│   ├── ai_provider.py        # AI abstraction (Ollama / Gemini)
-│   ├── tools.py              # Tool registry (8 tools the agent can call)
-│   ├── job_analyzer.py       # Parse job postings from URLs or text
-│   ├── identity_loader.py    # Load profile from YAML + PDF + GitHub + portfolio
-│   ├── resume_builder.py     # Generate tailored resume content
+│   ├── agent.py             # ReAct agent core (think → act → observe loop)
+│   ├── ai_provider.py       # AI abstraction (Ollama / Gemini)
+│   ├── tools.py             # Tool registry (8 tools the agent can call)
+│   ├── job_analyzer.py      # Parse job postings from URLs or text
+│   ├── identity_loader.py   # Load profile from YAML + PDF + GitHub + portfolio
+│   ├── resume_builder.py    # Generate tailored resume content
 │   ├── company_researcher.py # Scrape and summarize company websites
-│   ├── pdf_generator.py      # Render resume to professional PDF
-│   ├── memory.py             # MongoDB-backed session memory
-│   └── database.py           # MongoDB Atlas connection manager
-├── identity/
-│   ├── profile.yaml          # Your personal profile data
-│   └── *.pdf                 # Your current CV/resume
-├── output/                   # Generated PDFs land here
-├── frontend.py               # Streamlit chat UI
-├── requirements.txt          # Python dependencies
-└── .env                      # API keys and config
+│   ├── pdf_generator.py     # Render resume to professional PDF (ReportLab)
+│   ├── memory.py            # MongoDB-backed session memory
+│   └── database.py          # MongoDB Atlas connection manager
+├── identity/                # ⚠️ Not tracked by git — you create this
+│   ├── profile.yaml         # Your personal profile data (see template below)
+│   └── YourName CV.pdf      # Your current resume/CV
+├── output/                  # Generated PDFs are saved here
+├── frontend.py              # Streamlit chat UI
+├── requirements.txt         # Python dependencies
+└── .env                     # API keys and config (not tracked by git)
 ```
 
 ---
@@ -123,10 +187,44 @@ ENABLE_WEB_SEARCH=true
 
 ### 3. Set up your identity
 
-Place your files in the `identity/` folder:
+Create an `identity/` folder and add your files:
 
-- **`profile.yaml`** — Your personal info, skills, and extra context
-- **`YourName CV.pdf`** — Your current resume/CV
+```
+identity/
+├── profile.yaml      ← fill in your personal details (template below)
+└── YourName CV.pdf   ← your current resume/CV as a PDF
+```
+
+> **Important:** Open `modules/identity_loader.py` and update the `RESUME_PATH` constant at the top to match your actual PDF filename.
+
+#### `profile.yaml` template
+
+```yaml
+personal:
+  name: "Your Full Name"
+  email: "you@example.com"
+  phone: "+1 (555) 000-0000"
+  linkedin: "https://linkedin.com/in/yourhandle"
+  github: "https://github.com/yourusername"
+  portfolio: "https://yourportfolio.com"
+
+summary: |
+  A brief 2–3 sentence professional summary about yourself.
+  Mention your domain, years of experience, and what you're looking for.
+
+skills:
+  - Python
+  - FastAPI
+  - React
+  - SQL
+  - Docker
+  # add as many as you like
+
+extra_context: |
+  Any additional context you want the AI to know about you.
+  For example: preferred job types, relocation preferences, salary range,
+  notable projects not on your resume, etc.
+```
 
 ### 4. Run
 
@@ -188,10 +286,24 @@ The sidebar has a **🔍 Web Search** toggle that enables/disables both Brave an
 
 ---
 
+## 🔧 Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `FileNotFoundError: identity/YourName CV.pdf` | Update `RESUME_PATH` in `modules/identity_loader.py` to match your PDF filename |
+| `FileNotFoundError: identity/profile.yaml` | Create the `identity/` folder and add `profile.yaml` using the template above |
+| Agent loops without finishing | The AI model may be too small — try `gemini-2.5-flash-lite` or a larger Ollama model |
+| MongoDB connection error | Ensure `MONGODB_URI` in `.env` uses the correct Atlas connection string with password |
+| `ModuleNotFoundError` | Run `pip install -r requirements.txt` inside your activated virtual environment |
+| Streamlit can't connect to backend | Make sure the FastAPI server is running on port 8000 before starting Streamlit |
+
+---
+
 ## 📄 License
 
 This project is for personal/educational use.
 
+---
 
 UI:
 ![alt text](/output/image.png)
